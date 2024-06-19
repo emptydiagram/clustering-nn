@@ -174,8 +174,7 @@ def binary_mnist_net():
 
     for i in range(N):
         print(f"Processing image {i}")
-        # label_one_hot = jnp.zeros((1, 10), dtype=jnp.uint8)
-        # label_one_hot.at[0, y_train[i]].set(1)
+        # TODO: this is very slow, parallelize
         for u in range(P):
             cv_group_res = cv_group(X_train_rf_NxPxD[i, u, :].reshape(1, -1), y_train_one_hot[i, :], theta)
 
