@@ -24,8 +24,8 @@ key = random.PRNGKey(rand_seed)
 
 class NOCNet:
     def __init__(self, params: dict):
-        attrs = ['num_classes', 'thresh', 'num_rfs', 'rf_size', 'num_segs_per_dend', 'capture', 'backoff', 'search', 'w_0', 'w_max']
-        num_classes, thresh, num_rfs, rf_size, num_segs_per_dend, capture, backoff, search, w_0, w_max = itemgetter(*attrs)(params)
+        attrs = ['num_classes', 'thresh', 'num_rfs', 'rf_size', 'num_segs_per_dend', 'capture', 'backoff', 'search', 'w_max']
+        num_classes, thresh, num_rfs, rf_size, num_segs_per_dend, capture, backoff, search, w_max = itemgetter(*attrs)(params)
 
 
         self.thresh = thresh
@@ -36,7 +36,6 @@ class NOCNet:
         self.capture = capture
         self.backoff = backoff
         self.search = search
-        self.w_0 = w_0
         self.w_max = w_max
 
         self.weights_RxCxDxQ = random.randint(key, (self.R, self.C, self.D, self.Q), 0, 10, dtype=jnp.uint8)
@@ -107,10 +106,10 @@ class NOCNet:
             thresholded_first_max_mask_RxCxQ = jnp.eye(self.Q)[thresholded_first_max_idx_RxC]
             dend_out_RxCxQ = thresholded_RxCxQ * thresholded_first_max_mask_RxCxQ
             dend_max_RxC = jnp.max(dend_out_RxCxQ, axis=2)
-            out_RxC = jnp.array([[1 if i > 0 else 0 for i in dend_max_RxC[r, :]] for r in range(self.R)])
+            cvu_out_RxC = jnp.array([[1 if i > 0 else 0 for i in dend_max_RxC[r, :]] for r in range(self.R)])
 
             # create C summation units, each taking R inputs
-            sums_C = jnp.sum(out_RxC, axis=0)
+            sums_C = jnp.sum(cvu_out_RxC, axis=0)
 
             # winner take all mask
             sums_first_max_idx = jnp.argmax(sums_C)
@@ -118,15 +117,28 @@ class NOCNet:
             print(f"{predicted_class_C=}")
 
             weights_delta_RxCxDxQ = self.update_weights(rf_patterns_RxD, dend_out_RxCxQ)
+            print(f"average weight delta = {weights_delta_RxCxDxQ.mean().item()}")
             weights_abs_diff_RxC = jnp.sum(jnp.abs(weights_delta_RxCxDxQ), axis=(2, 3))
             weights_net_delta_RxC = jnp.sum(weights_delta_RxCxDxQ, axis=(2,3))
 
             O = int(jnp.sqrt(self.R))
-            weights_abs_diff_OxOxC = weights_abs_diff_RxC.reshape(O, O, self.C)
-
-            print(jnp.sum(weights_abs_diff_OxOxC))
-
             halfC = int(self.C / 2)
+
+            cvu_out_OxOxC = cvu_out_RxC.reshape(O, O, self.C)
+
+            plt.figure(figsize=(halfC * 3 + 2, 6))
+            for i in range(2):
+                for j in range(halfC):
+                    idx = i * halfC + j
+                    plt.subplot(2, halfC, idx + 1)
+                    plt.imshow(cvu_out_OxOxC[:, :, idx], cmap="binary")
+                    plt.title(f"CVU out, Class = {idx}")
+
+            plt.suptitle(f"CVU output, for all {self.C} classes")
+            plt.show()
+
+            weights_abs_diff_OxOxC = weights_abs_diff_RxC.reshape(O, O, self.C)
+            print("sum of absolute differences: ", jnp.sum(weights_abs_diff_OxOxC))
             plt.figure(figsize=(halfC * 3 + 2, 6))
             for i in range(2):
                 for j in range(halfC):
@@ -137,6 +149,7 @@ class NOCNet:
 
             plt.suptitle(f"Weight update sum of absolute deviances, for all {self.C} classes")
             plt.show()
+
 
 
     # from NOCAC Fig. 6 caption: "Note that for the update function (Figure 8), the int output A is binarized to bits, i.e., spikes."
@@ -160,7 +173,7 @@ class NOCNet:
         delta_backoff = r_backoff * -self.backoff
         delta_search = r_search * self.search
         weights_updated_RxCxDxQ = self.weights_RxCxDxQ + delta_capture + delta_backoff + delta_search
-        weights_clipped_RxCxDxQ = jnp.clip(weights_updated_RxCxDxQ, self.w_0, self.w_max)
+        weights_clipped_RxCxDxQ = jnp.clip(weights_updated_RxCxDxQ, 0, self.w_max)
         weights_delta_RxCxDxQ = weights_clipped_RxCxDxQ - self.weights_RxCxDxQ
         self.weights_RxCxDxQ = weights_clipped_RxCxDxQ
         return weights_delta_RxCxDxQ
@@ -184,14 +197,16 @@ def run():
 
     # num_classes = 10
     num_classes = 2 # binary, binarized MNIST
-    thresh = 7
+    thresh = 5
     num_rfs = 576
     num_segs_per_dend = 16
     # search << backoff, capture
     capture = 10
     backoff = 10
     search = 1
-    w_0 = 5
+    # w_0 doesnt actually show up in the unified dendrite update circuit, so unclear where
+    # it comes into play
+    # w_0 = 5
     w_max = 8
     params = {
         'num_classes': num_classes,
@@ -202,7 +217,7 @@ def run():
         'capture': capture,
         'backoff': backoff,
         'search': search,
-        'w_0': w_0,
+        # 'w_0': w_0,
         'w_max': w_max
     }
     nocnet = NOCNet(params)
