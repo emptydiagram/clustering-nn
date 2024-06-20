@@ -4,6 +4,7 @@ from operator import itemgetter
 
 import jax.numpy as jnp
 from jax import random
+import matplotlib.pyplot as plt
 
 rand_seed = 299792458
 key = random.PRNGKey(rand_seed)
@@ -38,7 +39,7 @@ class NOCNet:
         self.w_0 = w_0
         self.w_max = w_max
 
-        self.weights = random.randint(key, (self.R, self.C, self.D, self.Q), 0, 10, dtype=jnp.uint8)
+        self.weights_RxCxDxQ = random.randint(key, (self.R, self.C, self.D, self.Q), 0, 10, dtype=jnp.uint8)
 
         # RF
         self.rf_nonzero_idxs = jnp.array([0, 2, 4, 10, 12, 14, 20, 22, 24])
@@ -92,13 +93,13 @@ class NOCNet:
         # there are R CV groups, each gets a D-bit distal input (RF) and C-bit proximal input (label)
         # this is online learning, no batching of inputs allowed
         for i in range(N):
-            print(f"Processing image {i}")
+            print(f"Processing image {i}, label = {labels[i]}")
 
             # need (C x 1) * (R x D) -> R x C x D
             rf_patterns_RxD = rfs_NxRxD[i, :, :]
             min_results_RxCxD = jnp.einsum('c,rd->rcd', labels_one_hot_NxC[i, :], rf_patterns_RxD)
 
-            pre_thresholds_RxCxQ = jnp.einsum('rcd,rcdq->rcq', min_results_RxCxD, self.weights)
+            pre_thresholds_RxCxQ = jnp.einsum('rcd,rcdq->rcq', min_results_RxCxD, self.weights_RxCxDxQ)
             threshold_masks_RxCxQ = pre_thresholds_RxCxQ >= self.thresh
             thresholded_RxCxQ = pre_thresholds_RxCxQ * threshold_masks_RxCxQ
             thresholded_first_max_idx_RxC = jnp.argmax(thresholded_RxCxQ, axis=2)
@@ -116,7 +117,27 @@ class NOCNet:
             predicted_class_C = jnp.array([1 if i == sums_first_max_idx else 0 for i in range(sums_C.shape[0]) ])
             print(f"{predicted_class_C=}")
 
-            self.update_weights(rf_patterns_RxD, dend_out_RxCxQ)
+            weights_delta_RxCxDxQ = self.update_weights(rf_patterns_RxD, dend_out_RxCxQ)
+            weights_abs_diff_RxC = jnp.sum(jnp.abs(weights_delta_RxCxDxQ), axis=(2, 3))
+            weights_net_delta_RxC = jnp.sum(weights_delta_RxCxDxQ, axis=(2,3))
+
+            O = int(jnp.sqrt(self.R))
+            weights_abs_diff_OxOxC = weights_abs_diff_RxC.reshape(O, O, self.C)
+
+            print(jnp.sum(weights_abs_diff_OxOxC))
+
+            halfC = int(self.C / 2)
+            plt.figure(figsize=(halfC * 3 + 2, 6))
+            for i in range(2):
+                for j in range(halfC):
+                    idx = i * halfC + j
+                    plt.subplot(2, halfC, idx + 1)
+                    plt.imshow(weights_abs_diff_OxOxC[:, :, idx], cmap="binary")
+                    plt.title(f"Σ|Δ|, Class = {idx}")
+
+            plt.suptitle(f"Weight update sum of absolute deviances, for all {self.C} classes")
+            plt.show()
+
 
     # from NOCAC Fig. 6 caption: "Note that for the update function (Figure 8), the int output A is binarized to bits, i.e., spikes."
     # so the output of dendrite inference function is a Q-bit vector. there are R * C dendrites (1-1 correspondence between CV units and dendrites,
@@ -138,10 +159,11 @@ class NOCNet:
         delta_capture = r_capture * self.capture
         delta_backoff = r_backoff * -self.backoff
         delta_search = r_search * self.search
-        weights_updated = self.weights + delta_capture + delta_backoff + delta_search
-        weights_clipped = jnp.clip(weights_updated, self.w_0, self.w_max)
-        self.weights = weights_clipped
-        return
+        weights_updated_RxCxDxQ = self.weights_RxCxDxQ + delta_capture + delta_backoff + delta_search
+        weights_clipped_RxCxDxQ = jnp.clip(weights_updated_RxCxDxQ, self.w_0, self.w_max)
+        weights_delta_RxCxDxQ = weights_clipped_RxCxDxQ - self.weights_RxCxDxQ
+        self.weights_RxCxDxQ = weights_clipped_RxCxDxQ
+        return weights_delta_RxCxDxQ
 
 
 
@@ -160,7 +182,8 @@ def run():
     # X_train, y_train, X_test, y_test = get_binarized_mnist()
     X_train, y_train, X_test, y_test = get_binarized_mnist(restricted_labels=[0, 1], train_size=1000, test_size=1000)
 
-    num_classes = 10
+    # num_classes = 10
+    num_classes = 2 # binary, binarized MNIST
     thresh = 7
     num_rfs = 576
     num_segs_per_dend = 16

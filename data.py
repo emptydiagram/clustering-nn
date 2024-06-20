@@ -24,7 +24,7 @@ def get_binarized_mnist(restricted_labels=None, train_size=1000, test_size=1000)
     y_test = test_data["label"].astype("uint8")
 
     # Binarize the images
-    threshold = 0.25
+    threshold = 0.45
     X_train = (X_train > threshold).astype("uint8")
     X_test = (X_test > threshold).astype("uint8")
 
@@ -34,15 +34,16 @@ def get_binarized_mnist(restricted_labels=None, train_size=1000, test_size=1000)
     print(f"{y_test.dtype=}, {y_test.shape=}")
 
     # plot first few images
-    num_plots = (3, 4)
-    plt.figure(figsize=(12, num_plots[0] * 3))
+    num_plots = (5, 5)
+    plt.figure(figsize=(15, num_plots[0] * 3.4))
     plt.suptitle(f"First {reduce(lambda x, y: x*y, num_plots)} images")
     for i in range(num_plots[0]):
         for j in range(num_plots[1]):
-            idx = i * num_plots[1] + j + 1
-            plt.subplot(num_plots[0], num_plots[1], idx)
-            plt.imshow(X_train[idx-1].reshape(28, 28), cmap="binary")
-            plt.title(f"Label: {y_train[i]}")
+            idx = i * num_plots[1] + j
+            plt.subplot(num_plots[0], num_plots[1], idx + 1)
+            plt.axis("off")
+            plt.imshow(X_train[idx].reshape(28, 28), cmap="binary")
+            plt.title(f"Label: {y_train[idx]}")
     plt.show()
 
     return X_train, y_train, X_test, y_test
