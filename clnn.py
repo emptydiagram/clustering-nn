@@ -120,6 +120,87 @@ def cv_group(rf_enc, label, theta):
     return out
 
 
+
+
+class Dendrite:
+    def __init__(self, theta: float, p: int, q: int):
+        self.theta = theta
+        self.q = q
+
+        self.weights = random.randint(key, (p, q), 0, 10)
+
+    def inference(self, x, y):
+        """
+        x : 1xp bit vector, the distal inputs
+        y: 1 bit, the proximal input
+        """
+        #min(x, y) between  bit vector and bit is just multiplication (bitwise AND)
+        x_y_min = x * y
+        pre_threshold = x_y_min @ self.weights
+        threshold_mask = pre_threshold >= self.theta
+        thresholded = pre_threshold * threshold_mask
+        thresholded_first_max_idx = jnp.argmax(thresholded)
+        thresholded_first_max_mask = jnp.array([1 if i == thresholded_first_max_idx else 0 for i in range(thresholded.shape[1])])
+        return thresholded * thresholded_first_max_mask
+        # return n_wta(thresholded)
+
+    def update(self):
+        pass
+
+class CVGroup:
+    def __init__(self, num_classes: int, theta: float, p: int, q: int):
+        self.num_classes = num_classes
+        self.theta = theta
+        self.p = p
+        self.q = q
+        self.units = [Dendrite(theta, p, q) for _ in range(num_classes)]
+
+    def inference(self, label, pat_enc):
+        """
+        label: C bit vector, one-hot encoding of label
+        pat_enc: 1xD bit vector, the encoded version of one RF of the pattern
+        """
+        out = jnp.empty((self.num_classes,), dtype=jnp.uint8)
+        for i in range(self.num_classes):
+            dend_out = self.units[i].inference(pat_enc, label[i])
+            out.at[i].set(1 if jnp.max(dend_out) > 0 else 0)
+        return out
+
+
+class CVGroupUnified:
+    def __init__(self, num_classes: int, theta: float, D: int, Q: int):
+        """
+        num_classes: number of classes for the classification problem
+        theta: threshold for the dendrites
+        D: number of components of the vector after two-rail encoding
+        Q: number of segments per dendrite (CV unit)
+        """
+        self.num_classes = num_classes
+        self.theta = theta
+        self.D = D
+        self.Q = Q
+
+        self.weights = random.randint(key, (num_classes, D, Q), 0, 10)
+
+    def inference(self, label_C, pat_enc_1xD):
+        """
+        label: C bit vector, one-hot encoding of label
+        pat_enc: 1xD bit vector, the encoded version of one RF of the pattern
+        """
+        label_Cx1 = label_C.reshape(-1, 1)
+        min_results_CxD = label_Cx1 @ pat_enc_1xD
+        pre_thresholds_CxQ = jnp.einsum('cd,cdq->cq', min_results_CxD, self.weights)
+        threshold_masks_CxQ = pre_thresholds_CxQ >= self.theta
+        thresholded_CxQ = pre_thresholds_CxQ * threshold_masks_CxQ
+        thresholded_first_max_idx_Cx1 = jnp.argmax(thresholded_CxQ, axis=1)
+        thresholded_first_max_mask_CxQ = jnp.eye(self.Q)[thresholded_first_max_idx_Cx1]
+        dend_out_CxQ = thresholded_CxQ * thresholded_first_max_mask_CxQ
+        dend_max_C = jnp.max(dend_out_CxQ, axis=1)
+        out_C = jnp.array([1 if i > 0 else 0 for i in dend_max_C])
+        return out_C
+
+
+
 def binary_mnist_net():
     X_train, y_train, X_test, y_test = get_binarized_mnist()
 
@@ -172,13 +253,16 @@ def binary_mnist_net():
     n_values = 10
     y_train_one_hot = jnp.eye(n_values)[y_train]
 
+    num_segments_per_dendrite = 16
+
+    cvgroups = [CVGroupUnified(n_values, theta, D, num_segments_per_dendrite) for _ in range(P)]
+
     for i in range(N):
         print(f"Processing image {i}")
         # TODO: this is very slow, parallelize
         for u in range(P):
-            cv_group_res = cv_group(X_train_rf_NxPxD[i, u, :].reshape(1, -1), y_train_one_hot[i, :], theta)
-
-
+            # cv_group_res = cv_group(X_train_rf_NxPxD[i, u, :].reshape(1, -1), y_train_one_hot[i, :], theta)
+            cvgroups[u].inference(y_train_one_hot[i, :], X_train_rf_NxPxD[i, u, :].reshape(1, -1))
 
 
 def run():
@@ -214,6 +298,17 @@ def run():
     print(f"{dif_out=}")
 
     print("=============")
+
+    # section 6.2:
+    # To implement a supervised classifier, the designer determines the following.
+    # 1) RF formation and encoding – these functions are both highly application dependent and crucial to the
+    # quality (accuracy and cost) of the classifier.
+    # 2) Network sizing: The number of RFs, the number of CV units per CV group (the number of labels), and
+    # the number of segments per CV unit.
+    # 3) Network tuning: For a representative data set, the parameters wmax, w0, threshold, capture, backoff, and
+    # search are established via parameter sweeps. During normal operation, these global parameters are fixed
+    # and are the same across all the segments in the network. To expedite the process a (small) representative
+    # subset of RFs may be used.
 
     binary_mnist_net()
 
