@@ -214,13 +214,10 @@ class CVGroupUnified:
 # > subset of RFs may be used.
 
 class NOCNet:
-    def __init__(self, num_classes: int, thresh: float, num_rfs: int, rf_size: int, num_segs_per_dend: int):
-        self.num_classes = num_classes
-        self.thresh = thresh
-        self.num_rfs = num_rfs
-        self.rf_size = rf_size
-        self.num_segs_per_dend = num_segs_per_dend
+    def __init__(self, params: dict):
+        num_classes, thresh, num_rfs, rf_size, num_segs_per_dend = params['num_classes'], params['thresh'], params['num_rfs'], params['rf_size'], params['num_segs_per_dend']
 
+        self.thresh = thresh
         self.C = num_classes
         self.R = num_rfs
         self.D = 2 * rf_size
@@ -298,6 +295,26 @@ class NOCNet:
             sums_first_max_idx = jnp.argmax(sums_C)
             predicted_class_C = jnp.array([1 if i == sums_first_max_idx else 0 for i in range(sums_C.shape[0]) ])
             print(f"{predicted_class_C=}")
+
+            self.update()
+
+    def update(self):
+        # TODO: update all
+        # NOTE: single dendrite update code
+        # x = x.reshape(-1, 1)
+        # z_gz = z > 0
+        # x_inv = 1 - x
+        # z_gz_inv = 1 - z_gz
+        # r_capture = x @ z_gz
+        # r_backoff = x_inv @ z_gz
+        # r_search = x @ z_gz_inv
+        # delta_capture = r_capture * capture
+        # delta_backoff = r_backoff * -backoff
+        # delta_search = r_search * search
+        # weights_updated = weights + delta_capture + delta_backoff + delta_search
+        # weights_clipped = jnp.clip(weights_updated, w_0, w_max)
+        # return weights_clipped
+        raise NotImplementedError
 
 
 
@@ -411,7 +428,14 @@ def run():
     num_rfs = 576
     rf_size = 9
     num_segs_per_dend = 18
-    nocnet = NOCNet(num_classes, thresh, num_rfs, rf_size, num_segs_per_dend)
+    params = {
+        'num_classes': num_classes,
+        'theta': thresh,
+        'num_rfs': num_rfs,
+        'rf_size': rf_size,
+        'num_segs_per_dend': num_segs_per_dend
+    }
+    nocnet = NOCNet(params)
     nocnet.inference(X_train, y_train)
 
 
