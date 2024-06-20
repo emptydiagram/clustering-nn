@@ -1,5 +1,7 @@
 from data import get_binarized_mnist
 
+from operator import itemgetter
+
 import jax.numpy as jnp
 from jax import random
 
@@ -21,15 +23,25 @@ key = random.PRNGKey(rand_seed)
 
 class NOCNet:
     def __init__(self, params: dict):
-        num_classes, thresh, num_rfs, rf_size, num_segs_per_dend = params['num_classes'], params['thresh'], params['num_rfs'], params['rf_size'], params['num_segs_per_dend']
+        attrs = ['num_classes', 'thresh', 'num_rfs', 'rf_size', 'num_segs_per_dend', 'capture', 'backoff', 'search', 'w_0', 'w_max']
+        num_classes, thresh, num_rfs, rf_size, num_segs_per_dend, capture, backoff, search, w_0, w_max = itemgetter(*attrs)(params)
+
 
         self.thresh = thresh
         self.C = num_classes
         self.R = num_rfs
         self.D = 2 * rf_size
         self.Q = num_segs_per_dend
+        self.capture = capture
+        self.backoff = backoff
+        self.search = search
+        self.w_0 = w_0
+        self.w_max = w_max
 
         self.weights = random.randint(key, (self.R, self.C, self.D, self.Q), 0, 10, dtype=jnp.uint8)
+
+        # RF
+        self.rf_nonzero_idxs = jnp.array([0, 2, 4, 10, 12, 14, 20, 22, 24])
 
     def inference(self, X, labels):
         """
@@ -45,15 +57,15 @@ class NOCNet:
 
         print(f"{out_size=}")
 
+
         # form receptive fields
         # TODO: empty instead of zeros?
         rfs_NxOxOxD = jnp.zeros((N, out_size, out_size, self.D), dtype=jnp.uint8)
         for i in range(out_size):
             for j in range(out_size):
-                rf_nz_idxs = jnp.array([0, 2, 4, 10, 12, 14, 20, 22, 24])
                 rf_Nx5x5 = X[:, i:i+5, j:j+5]
                 rf_Nx25 = rf_Nx5x5.reshape(N, -1)
-                rf_Nx9 = rf_Nx25[:, rf_nz_idxs]
+                rf_Nx9 = rf_Nx25[:, self.rf_nonzero_idxs]
 
                 # number of nonzero:
                 # for u in range(N):
@@ -78,13 +90,13 @@ class NOCNet:
         print(f"{labels_one_hot_NxC.shape=}")
 
         # there are R CV groups, each gets a D-bit distal input (RF) and C-bit proximal input (label)
+        # this is online learning, no batching of inputs allowed
         for i in range(N):
             print(f"Processing image {i}")
-            # TODO: process through all R CV groups in parallel
 
             # need (C x 1) * (R x D) -> R x C x D
-            rf_patterns = rfs_NxRxD[i, :, :]
-            min_results_RxCxD = jnp.einsum('c,rd->rcd', labels_one_hot_NxC[i, :], rf_patterns)
+            rf_patterns_RxD = rfs_NxRxD[i, :, :]
+            min_results_RxCxD = jnp.einsum('c,rd->rcd', labels_one_hot_NxC[i, :], rf_patterns_RxD)
 
             pre_thresholds_RxCxQ = jnp.einsum('rcd,rcdq->rcq', min_results_RxCxD, self.weights)
             threshold_masks_RxCxQ = pre_thresholds_RxCxQ >= self.thresh
@@ -104,7 +116,7 @@ class NOCNet:
             predicted_class_C = jnp.array([1 if i == sums_first_max_idx else 0 for i in range(sums_C.shape[0]) ])
             print(f"{predicted_class_C=}")
 
-            self.update_weights(rf_patterns, dend_out_RxCxQ)
+            self.update_weights(rf_patterns_RxD, dend_out_RxCxQ)
 
     # from NOCAC Fig. 6 caption: "Note that for the update function (Figure 8), the int output A is binarized to bits, i.e., spikes."
     # so the output of dendrite inference function is a Q-bit vector. there are R * C dendrites (1-1 correspondence between CV units and dendrites,
@@ -114,23 +126,22 @@ class NOCNet:
         X: RxD bit matrix, the receptive fields for a given image
         Z: RxCxQ bit tensor, the output of the CV units
         """
-        # TODO: update all
-        # NOTE: single dendrite update code
-        # x = x.reshape(-1, 1)
-        # z_gz = z > 0
-        # x_inv = 1 - x
-        # z_gz_inv = 1 - z_gz
-        # r_capture = x @ z_gz
-        # r_backoff = x_inv @ z_gz
-        # r_search = x @ z_gz_inv
-        # delta_capture = r_capture * capture
-        # delta_backoff = r_backoff * -backoff
-        # delta_search = r_search * search
-        # weights_updated = weights + delta_capture + delta_backoff + delta_search
-        # weights_clipped = jnp.clip(weights_updated, w_0, w_max)
-        # return weights_clipped
-        raise NotImplementedError
+        Z_bin_RxCxQ = jnp.where(Z_RxCxQ > 0, 1, 0).astype(jnp.uint8)
 
+        X_inv_RxD = (1 - X_RxD)
+        Z_bin_inv_RxCxQ = 1 - Z_bin_RxCxQ
+
+        r_capture = jnp.einsum('rd,rcq->rcdq', X_RxD, Z_bin_RxCxQ)
+        r_backoff = jnp.einsum('rd,rcq->rcdq', X_inv_RxD, Z_bin_RxCxQ)
+        r_search = jnp.einsum('rd,rcq->rcdq', X_RxD, Z_bin_inv_RxCxQ)
+
+        delta_capture = r_capture * self.capture
+        delta_backoff = r_backoff * -self.backoff
+        delta_search = r_search * self.search
+        weights_updated = self.weights + delta_capture + delta_backoff + delta_search
+        weights_clipped = jnp.clip(weights_updated, self.w_0, self.w_max)
+        self.weights = weights_clipped
+        return
 
 
 
@@ -146,18 +157,30 @@ def run():
 
     rf_size = int(jnp.sum(rf_kernel))
 
-    X_train, y_train, X_test, y_test = get_binarized_mnist()
+    # X_train, y_train, X_test, y_test = get_binarized_mnist()
+    X_train, y_train, X_test, y_test = get_binarized_mnist(restricted_labels=[0, 1], train_size=1000, test_size=1000)
 
     num_classes = 10
     thresh = 7
     num_rfs = 576
     num_segs_per_dend = 16
+    # search << backoff, capture
+    capture = 10
+    backoff = 10
+    search = 1
+    w_0 = 5
+    w_max = 8
     params = {
         'num_classes': num_classes,
         'thresh': thresh,
         'num_rfs': num_rfs,
         'rf_size': rf_size,
-        'num_segs_per_dend': num_segs_per_dend
+        'num_segs_per_dend': num_segs_per_dend,
+        'capture': capture,
+        'backoff': backoff,
+        'search': search,
+        'w_0': w_0,
+        'w_max': w_max
     }
     nocnet = NOCNet(params)
     nocnet.inference(X_train, y_train)

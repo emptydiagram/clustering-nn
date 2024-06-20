@@ -1,21 +1,30 @@
+from functools import reduce
+
 from datasets import load_dataset
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
-def get_binarized_mnist():
+def get_binarized_mnist(restricted_labels=None, train_size=1000, test_size=1000):
     ds = load_dataset("mnist")
     ds = ds.with_format("jax")
 
-    ds["train"] = ds["train"][:1000]
-    ds["test"] = ds["test"][1000:2000]
+    train_data = ds["train"]
+    test_data = ds["test"]
 
-    X_train = ds["train"]["image"] / 255.0
-    y_train = ds["train"]["label"].astype("uint8")
-    X_test = ds["test"]["image"] / 255.0
-    y_test = ds["test"]["label"].astype("uint8")
+    if restricted_labels is not None:
+        train_data = train_data.filter(lambda x: x["label"] in restricted_labels)
+        test_data = test_data.filter(lambda x: x["label"] in restricted_labels)
+
+    train_data = train_data.take(train_size)
+    test_data = test_data.take(test_size)
+
+    X_train = train_data["image"] / 255.0
+    y_train = train_data["label"].astype("uint8")
+    X_test = test_data["image"] / 255.0
+    y_test = test_data["label"].astype("uint8")
 
     # Binarize the images
-    threshold = 0.4
+    threshold = 0.25
     X_train = (X_train > threshold).astype("uint8")
     X_test = (X_test > threshold).astype("uint8")
 
@@ -25,13 +34,15 @@ def get_binarized_mnist():
     print(f"{y_test.dtype=}, {y_test.shape=}")
 
     # plot first few images
-    # plt.figure(figsize=(12, 5))
-    # num_plots = 5
-    # plt.suptitle(f"First {num_plots} images")
-    # for i in range(num_plots):
-    #     plt.subplot(1, num_plots, i+1)
-    #     plt.imshow(X_train[i].reshape(28, 28), cmap="binary")
-    #     plt.title(f"Label: {y_train[i]}")
-    # plt.show()
+    num_plots = (3, 4)
+    plt.figure(figsize=(12, num_plots[0] * 3))
+    plt.suptitle(f"First {reduce(lambda x, y: x*y, num_plots)} images")
+    for i in range(num_plots[0]):
+        for j in range(num_plots[1]):
+            idx = i * num_plots[1] + j + 1
+            plt.subplot(num_plots[0], num_plots[1], idx)
+            plt.imshow(X_train[idx-1].reshape(28, 28), cmap="binary")
+            plt.title(f"Label: {y_train[i]}")
+    plt.show()
 
     return X_train, y_train, X_test, y_test
