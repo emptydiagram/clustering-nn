@@ -2,6 +2,7 @@ from data import get_binarized_mnist
 
 from operator import itemgetter
 
+import jax
 import jax.numpy as jnp
 from jax import random
 import matplotlib.pyplot as plt
@@ -160,6 +161,9 @@ class NOCNet:
         X: RxD bit matrix, the receptive fields for a given image
         Z: RxCxQ bit tensor, the output of the CV units
         """
+        print("----------------------------------")
+        print(f"{self.weights_RxCxDxQ[0, 0, :, :]=}")
+
         Z_bin_RxCxQ = jnp.where(Z_RxCxQ > 0, 1, 0).astype(jnp.uint8)
 
         X_inv_RxD = (1 - X_RxD)
@@ -175,13 +179,17 @@ class NOCNet:
         weights_updated_RxCxDxQ = self.weights_RxCxDxQ + delta_capture + delta_backoff + delta_search
         weights_clipped_RxCxDxQ = jnp.clip(weights_updated_RxCxDxQ, 0, self.w_max)
         weights_delta_RxCxDxQ = weights_clipped_RxCxDxQ - self.weights_RxCxDxQ
-        self.weights_RxCxDxQ = weights_clipped_RxCxDxQ
+        self.weights_RxCxDxQ.at[:, :, :, :].set(weights_clipped_RxCxDxQ)
+        print(f"{self.weights_RxCxDxQ[0, 0, :, :]=}")
+        print(f"{weights_delta_RxCxDxQ[0, 0, :, :]=}")
         return weights_delta_RxCxDxQ
 
 
 
 
 def run():
+    print(f"{jax.devices()=}")
+
     rf_kernel = jnp.array([
         [1, 0, 1, 0, 1],
         [0, 0, 0, 0, 0],
@@ -203,7 +211,7 @@ def run():
     # search << backoff, capture
     capture = 10
     backoff = 10
-    search = 1
+    search = 3
     # w_0 doesnt actually show up in the unified dendrite update circuit, so unclear where
     # it comes into play
     # w_0 = 5
