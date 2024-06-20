@@ -240,6 +240,7 @@ class NOCNet:
         print(f"{out_size=}")
 
         # form receptive fields
+        # TODO: empty instead of zeros?
         rfs_NxOxOxD = jnp.zeros((N, out_size, out_size, self.D), dtype=jnp.uint8)
         for i in range(out_size):
             for j in range(out_size):
@@ -255,13 +256,13 @@ class NOCNet:
                 #         print(f"{num_nz=}")
 
                 # two-rail encode. 9x1 -> 18x1
-                # 0 -> 01, 1 -> 10
+                # assuming (0 -> 01, 1 -> 10), paper doesn't clarify
                 mapping = jnp.array([[0, 1], [1, 0]], dtype=jnp.uint8)
                 enc_Nx18 = mapping[rf_Nx9].reshape(1000, -1)
 
                 rfs_NxOxOxD.at[:, i, j, :].set(enc_Nx18)
 
-        # dual-rail encode each RF output, giving  R x D tensor (or R 1xD tensors)
+        # dual-rail encode each RF output, giving  N (R x D) encoded tensors
         rfs_NxRxD = rfs_NxOxOxD.reshape(N, -1, self.D)
 
         print(f"Formed RFs, {rfs_NxRxD.shape=}")
@@ -276,7 +277,8 @@ class NOCNet:
             # TODO: process through all R CV groups in parallel
 
             # need (C x 1) * (R x D) -> R x C x D
-            min_results_RxCxD = jnp.einsum('c,rd->rcd', labels_one_hot_NxC[i, :], rfs_NxRxD[i, :, :])
+            rf_patterns = rfs_NxRxD[i, :, :]
+            min_results_RxCxD = jnp.einsum('c,rd->rcd', labels_one_hot_NxC[i, :], rf_patterns)
 
             pre_thresholds_RxCxQ = jnp.einsum('rcd,rcdq->rcq', min_results_RxCxD, self.weights)
             threshold_masks_RxCxQ = pre_thresholds_RxCxQ >= self.thresh
@@ -296,9 +298,16 @@ class NOCNet:
             predicted_class_C = jnp.array([1 if i == sums_first_max_idx else 0 for i in range(sums_C.shape[0]) ])
             print(f"{predicted_class_C=}")
 
-            self.update()
+            self.update_weights(rf_patterns, dend_out_RxCxQ)
 
-    def update(self):
+    # from NOCAC Fig. 6 caption: "Note that for the update function (Figure 8), the int output A is binarized to bits, i.e., spikes."
+    # so the output of dendrite inference function is a Q-bit vector. there are R * C dendrites (1-1 correspondence between CV units and dendrites,
+    # R CV groups, each group has C CV units))
+    def update_weights(self, X_RxD, Z_RxCxQ):
+        """
+        X: RxD bit matrix, the receptive fields for a given image
+        Z: RxCxQ bit tensor, the output of the CV units
+        """
         # TODO: update all
         # NOTE: single dendrite update code
         # x = x.reshape(-1, 1)
@@ -421,16 +430,25 @@ def run():
 
     # binary_mnist_net()
 
+    rf_kernel = jnp.array([
+        [1, 0, 1, 0, 1],
+        [0, 0, 0, 0, 0],
+        [1, 0, 1, 0, 1],
+        [0, 0, 0, 0, 0],
+        [1, 0, 1, 0, 1]
+    ], dtype=jnp.uint8)
+
+    rf_size = int(jnp.sum(rf_kernel))
+
     X_train, y_train, X_test, y_test = get_binarized_mnist()
 
     num_classes = 10
     thresh = 7
     num_rfs = 576
-    rf_size = 9
-    num_segs_per_dend = 18
+    num_segs_per_dend = 16
     params = {
         'num_classes': num_classes,
-        'theta': thresh,
+        'thresh': thresh,
         'num_rfs': num_rfs,
         'rf_size': rf_size,
         'num_segs_per_dend': num_segs_per_dend
