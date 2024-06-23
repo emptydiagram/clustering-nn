@@ -25,6 +25,7 @@ key = random.PRNGKey(rand_seed)
 
 class NOCNet:
     def __init__(self, params: dict):
+        print(f"Initializing NOCNet with params: {params}")
         attrs = ['num_classes', 'thresh', 'num_rfs', 'rf_size', 'num_segs_per_dend', 'capture', 'backoff', 'search', 'w_max']
         num_classes, thresh, num_rfs, rf_size, num_segs_per_dend, capture, backoff, search, w_max = itemgetter(*attrs)(params)
 
@@ -51,13 +52,7 @@ class NOCNet:
         """
 
         N = X.shape[0]
-
-        print(f"{X.shape=}, {labels.shape=}, {labels.min()=}, {labels.max()=}")
-
         out_size = jnp.sqrt(self.R).astype(int)
-
-        print(f"{out_size=}")
-
 
         # form receptive fields
         # TODO: empty instead of zeros?
@@ -84,22 +79,31 @@ class NOCNet:
         # dual-rail encode each RF output, giving  N (R x D) encoded tensors
         rfs_NxRxD = rfs_NxOxOxD.reshape(N, -1, self.D)
 
-        print(f"Formed RFs, {rfs_NxRxD.shape=}")
 
         labels_one_hot_NxC = jnp.eye(self.C)[labels]
 
+        print(f"{X.shape=}, {labels.shape=}, {labels.min()=}, {labels.max()=}")
+        print(f"{out_size=}")
+        print(f"Formed RFs, {rfs_NxRxD.shape=}")
         print(f"{labels_one_hot_NxC.shape=}")
 
         # there are R CV groups, each gets a D-bit distal input (RF) and C-bit proximal input (label)
         # this is online learning, no batching of inputs allowed
         for i in range(N):
-            print(f"Processing image {i}, label = {labels[i]}")
+            print(f"\nProcessing image {i}, label = {labels[i]}\n------------------------------")
 
             # need (C x 1) * (R x D) -> R x C x D
             rf_patterns_RxD = rfs_NxRxD[i, :, :]
+
+            num_active_raw_rf = jnp.sum(jnp.where(rf_patterns_RxD > 0, 1, 0)).item()
+
             min_results_RxCxD = jnp.einsum('c,rd->rcd', labels_one_hot_NxC[i, :], rf_patterns_RxD)
 
             pre_thresholds_RxCxQ = jnp.einsum('rcd,rcdq->rcq', min_results_RxCxD, self.weights_RxCxDxQ)
+
+            num_active_pre_thresh = jnp.sum(jnp.where(pre_thresholds_RxCxQ > 0, 1, 0)).item()
+
+
             threshold_masks_RxCxQ = pre_thresholds_RxCxQ >= self.thresh
             thresholded_RxCxQ = pre_thresholds_RxCxQ * threshold_masks_RxCxQ
             thresholded_first_max_idx_RxC = jnp.argmax(thresholded_RxCxQ, axis=2)
@@ -107,6 +111,14 @@ class NOCNet:
             thresholded_first_max_mask_RxCxQ = jnp.eye(self.Q)[thresholded_first_max_idx_RxC]
             dend_out_RxCxQ = thresholded_RxCxQ * thresholded_first_max_mask_RxCxQ
             dend_max_RxC = jnp.max(dend_out_RxCxQ, axis=2)
+            # calculate the number of cells where dend_max > 0
+            num_active_cells = jnp.sum(jnp.where(dend_max_RxC > 0, 1, 0)).item()
+
+            if num_active_raw_rf > 0 or num_active_pre_thresh > 0 or num_active_cells > 0:
+                print(f"{num_active_raw_rf=}")
+                print(f"{num_active_pre_thresh=}")
+                print(f"{num_active_cells=}")
+
             cvu_out_RxC = jnp.array([[1 if i > 0 else 0 for i in dend_max_RxC[r, :]] for r in range(self.R)])
 
             # create C summation units, each taking R inputs
@@ -125,10 +137,11 @@ class NOCNet:
             O = int(jnp.sqrt(self.R))
             halfC = int(self.C / 2)
 
+            # display cvu_out
             cvu_out_OxOxC = cvu_out_RxC.reshape(O, O, self.C)
 
             plt.figure(figsize=(halfC * 3 + 2, 6))
-            for i in range(2):
+            for i in range(self.C):
                 for j in range(halfC):
                     idx = i * halfC + j
                     plt.subplot(2, halfC, idx + 1)
@@ -136,8 +149,21 @@ class NOCNet:
                     plt.title(f"CVU out, Class = {idx}")
 
             plt.suptitle(f"CVU output, for all {self.C} classes")
-            plt.show()
+            # plt.show()
+            plt.close()
 
+
+            # display sums_C
+
+            plt.figure(figsize=(6, 6))
+            plt.imshow(sums_C.reshape(1, -1), cmap="binary")
+            plt.title("Summation units")
+            # plt.show()
+            plt.close()
+
+
+
+            # display weights_abs_diff
             weights_abs_diff_OxOxC = weights_abs_diff_RxC.reshape(O, O, self.C)
             print("sum of absolute differences: ", jnp.sum(weights_abs_diff_OxOxC))
             plt.figure(figsize=(halfC * 3 + 2, 6))
@@ -149,7 +175,8 @@ class NOCNet:
                     plt.title(f"Σ|Δ|, Class = {idx}")
 
             plt.suptitle(f"Weight update sum of absolute deviances, for all {self.C} classes")
-            plt.show()
+            # plt.show()
+            plt.close()
 
 
 
@@ -161,8 +188,8 @@ class NOCNet:
         X: RxD bit matrix, the receptive fields for a given image
         Z: RxCxQ bit tensor, the output of the CV units
         """
-        print("----------------------------------")
-        print(f"{self.weights_RxCxDxQ[0, 0, :, :]=}")
+        # print("----------------------------------")
+        # print(f"{self.weights_RxCxDxQ[0, 0, :, :]=}")
 
         Z_bin_RxCxQ = jnp.where(Z_RxCxQ > 0, 1, 0).astype(jnp.uint8)
 
@@ -180,8 +207,8 @@ class NOCNet:
         weights_clipped_RxCxDxQ = jnp.clip(weights_updated_RxCxDxQ, 0, self.w_max)
         weights_delta_RxCxDxQ = weights_clipped_RxCxDxQ - self.weights_RxCxDxQ
         self.weights_RxCxDxQ.at[:, :, :, :].set(weights_clipped_RxCxDxQ)
-        print(f"{self.weights_RxCxDxQ[0, 0, :, :]=}")
-        print(f"{weights_delta_RxCxDxQ[0, 0, :, :]=}")
+        # print(f"{self.weights_RxCxDxQ[0, 0, :, :]=}")
+        # print(f"{weights_delta_RxCxDxQ[0, 0, :, :]=}")
         return weights_delta_RxCxDxQ
 
 
