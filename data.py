@@ -4,6 +4,7 @@ from datasets import load_dataset
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
+# TODO: enforce same number of labels per class
 def get_binarized_mnist(restricted_labels=None, train_size=1000, test_size=1000):
     ds = load_dataset("mnist")
     ds = ds.with_format("jax")

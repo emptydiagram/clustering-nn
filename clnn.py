@@ -46,16 +46,10 @@ class NOCNet:
         # RF
         self.rf_nonzero_idxs = jnp.array([0, 2, 4, 10, 12, 14, 20, 22, 24])
 
-    def inference(self, X, labels):
-        """
-        X: NxHxW tensor of bits, collectiion of binarized grayscale images
-        label: Nx1 tensor of ints, the labels range from 0 to 9
-        """
-
+    def form_receptive_fields(self, X):
         N = X.shape[0]
         out_size = jnp.sqrt(self.R).astype(int)
 
-        # form receptive fields
         rfs_NxOxOxD = jnp.empty((N, out_size, out_size, self.D), dtype=jnp.uint8)
         for i in range(out_size):
             for j in range(out_size):
@@ -71,14 +65,23 @@ class NOCNet:
                 rfs_NxOxOxD = rfs_NxOxOxD.at[:, i, j, :].set(enc_Nx18)
 
         rfs_NxRxD = rfs_NxOxOxD.reshape(N, -1, self.D)
+        return rfs_NxRxD
 
+
+    def inference(self, X):
+        return self.supervised_learning(X, jnp.ones(X.shape[0], dtype=jnp.uint8))
+
+
+    def supervised_learning(self, X, labels):
+        """
+        X: NxHxW tensor of bits, collectiion of binarized grayscale images
+        label: Nx1 tensor of ints, the labels range from 0 to 9
+        """
+
+        N = X.shape[0]
+        rfs_NxRxD = self.form_receptive_fields(X)
 
         labels_one_hot_NxC = jnp.eye(self.C)[labels]
-
-        print(f"{X.shape=}, {labels.shape=}, {labels.min()=}, {labels.max()=}")
-        print(f"{out_size=}")
-        print(f"Formed RFs, {rfs_NxRxD.shape=}")
-        print(f"{labels_one_hot_NxC.shape=}")
 
         # there are R CV groups, each gets a D-bit distal input (RF) and C-bit proximal input (label)
         # this is online learning, no batching of inputs allowed
@@ -107,9 +110,8 @@ class NOCNet:
             sums_C = jnp.sum(cvu_out_RxC, axis=0)
 
             # winner take all mask
-            sums_first_max_idx = jnp.argmax(sums_C)
-            predicted_class_C = jnp.array([1 if i == sums_first_max_idx else 0 for i in range(sums_C.shape[0]) ])
-            predicted_digit = jnp.argmax(predicted_class_C).item()
+            predicted_digit = jnp.argmax(sums_C)
+            predicted_class_C = jnp.array([1 if i == predicted_digit else 0 for i in range(sums_C.shape[0]) ])
             images_correct.append(int(predicted_digit == labels[i]))
 
             print(f"{predicted_digit=}")
@@ -117,9 +119,10 @@ class NOCNet:
             if i >= 100:
                 print(f"Last 100 accuracy: {jnp.mean(jnp.array(images_correct[-100:])).item():.3f}")
 
+            # perform update
+            weights_delta_RxCxDxQ = self.update_weights(rf_patterns_RxD, dend_out_RxCxQ)
 
             def plot_stuff():
-                weights_delta_RxCxDxQ = self.update_weights(rf_patterns_RxD, dend_out_RxCxQ)
                 # print(f"average weight delta = {weights_delta_RxCxDxQ.mean().item()}")
                 weights_abs_diff_RxC = jnp.sum(jnp.abs(weights_delta_RxCxDxQ), axis=(2, 3))
                 weights_net_delta_RxC = jnp.sum(weights_delta_RxCxDxQ, axis=(2,3))
@@ -169,7 +172,7 @@ class NOCNet:
 
             # plot_stuff()
 
-
+        return images_correct
 
     # from NOCAC Fig. 6 caption: "Note that for the update function (Figure 8), the int output A is binarized to bits, i.e., spikes."
     # so the output of dendrite inference function is a Q-bit vector. there are R * C dendrites (1-1 correspondence between CV units and dendrites,
@@ -241,11 +244,18 @@ def run():
 
     rf_size = int(jnp.sum(rf_kernel))
 
-    # X_train, y_train, X_test, y_test = get_binarized_mnist()
-    X_train, y_train, X_test, y_test = get_binarized_mnist(restricted_labels=[0, 1], train_size=1000, test_size=1000)
+    labels_01 = [0, 1]
+    labels_012 = [0, 1, 2]
+    labels_01234 = list(range(5))
+    labels_all = list(range(10))
 
-    # num_classes = 10
-    num_classes = 2 # binary, binarized MNIST
+    labels = labels_all
+    num_classes = len(labels)
+    train_size = 300 * num_classes
+    test_size = 300 * num_classes
+
+    X_train, y_train, X_test, y_test = get_binarized_mnist(restricted_labels=labels, train_size=train_size, test_size=test_size)
+
     thresh = 5
     num_rfs = 576
     num_segs_per_dend = 16
@@ -270,7 +280,9 @@ def run():
         'w_max': w_max
     }
     nocnet = NOCNet(params)
-    nocnet.inference(X_train, y_train)
+    results_train = nocnet.supervised_learning(X_train, y_train)
+
+    results_test = nocnet.inference(X_test)
 
 
 if __name__ == "__main__":
