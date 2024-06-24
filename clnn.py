@@ -66,7 +66,7 @@ class NOCNet:
                 # two-rail encode. 9x1 -> 18x1
                 # assuming (0 -> 01, 1 -> 10), paper doesn't clarify
                 mapping = jnp.array([[0, 1], [1, 0]], dtype=jnp.uint8)
-                enc_Nx18 = mapping[rf_Nx9].reshape(1000, -1)
+                enc_Nx18 = mapping[rf_Nx9].reshape(N, -1)
 
                 rfs_NxOxOxD = rfs_NxOxOxD.at[:, i, j, :].set(enc_Nx18)
 
