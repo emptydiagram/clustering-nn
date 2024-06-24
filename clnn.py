@@ -55,28 +55,20 @@ class NOCNet:
         out_size = jnp.sqrt(self.R).astype(int)
 
         # form receptive fields
-        # TODO: empty instead of zeros?
-        rfs_NxOxOxD = jnp.zeros((N, out_size, out_size, self.D), dtype=jnp.uint8)
+        rfs_NxOxOxD = jnp.empty((N, out_size, out_size, self.D), dtype=jnp.uint8)
         for i in range(out_size):
             for j in range(out_size):
                 rf_Nx5x5 = X[:, i:i+5, j:j+5]
                 rf_Nx25 = rf_Nx5x5.reshape(N, -1)
                 rf_Nx9 = rf_Nx25[:, self.rf_nonzero_idxs]
 
-                # number of nonzero:
-                # for u in range(N):
-                #     num_nz = jnp.sum(jnp.where(rf_Nx9[u, :] > 0, 1, 0)).item()
-                #     if num_nz > 0:
-                #         print(f"{num_nz=}")
-
                 # two-rail encode. 9x1 -> 18x1
                 # assuming (0 -> 01, 1 -> 10), paper doesn't clarify
                 mapping = jnp.array([[0, 1], [1, 0]], dtype=jnp.uint8)
                 enc_Nx18 = mapping[rf_Nx9].reshape(1000, -1)
 
-                rfs_NxOxOxD.at[:, i, j, :].set(enc_Nx18)
+                rfs_NxOxOxD = rfs_NxOxOxD.at[:, i, j, :].set(enc_Nx18)
 
-        # dual-rail encode each RF output, giving  N (R x D) encoded tensors
         rfs_NxRxD = rfs_NxOxOxD.reshape(N, -1, self.D)
 
 
@@ -95,14 +87,8 @@ class NOCNet:
             # need (C x 1) * (R x D) -> R x C x D
             rf_patterns_RxD = rfs_NxRxD[i, :, :]
 
-            num_active_raw_rf = jnp.sum(jnp.where(rf_patterns_RxD > 0, 1, 0)).item()
-
             min_results_RxCxD = jnp.einsum('c,rd->rcd', labels_one_hot_NxC[i, :], rf_patterns_RxD)
-
             pre_thresholds_RxCxQ = jnp.einsum('rcd,rcdq->rcq', min_results_RxCxD, self.weights_RxCxDxQ)
-
-            num_active_pre_thresh = jnp.sum(jnp.where(pre_thresholds_RxCxQ > 0, 1, 0)).item()
-
 
             threshold_masks_RxCxQ = pre_thresholds_RxCxQ >= self.thresh
             thresholded_RxCxQ = pre_thresholds_RxCxQ * threshold_masks_RxCxQ
@@ -111,13 +97,6 @@ class NOCNet:
             thresholded_first_max_mask_RxCxQ = jnp.eye(self.Q)[thresholded_first_max_idx_RxC]
             dend_out_RxCxQ = thresholded_RxCxQ * thresholded_first_max_mask_RxCxQ
             dend_max_RxC = jnp.max(dend_out_RxCxQ, axis=2)
-            # calculate the number of cells where dend_max > 0
-            num_active_cells = jnp.sum(jnp.where(dend_max_RxC > 0, 1, 0)).item()
-
-            if num_active_raw_rf > 0 or num_active_pre_thresh > 0 or num_active_cells > 0:
-                print(f"{num_active_raw_rf=}")
-                print(f"{num_active_pre_thresh=}")
-                print(f"{num_active_cells=}")
 
             cvu_out_RxC = jnp.array([[1 if i > 0 else 0 for i in dend_max_RxC[r, :]] for r in range(self.R)])
 
@@ -191,6 +170,15 @@ class NOCNet:
         # print("----------------------------------")
         # print(f"{self.weights_RxCxDxQ[0, 0, :, :]=}")
 
+        # num_active_X = jnp.sum(jnp.where(X_RxD > 0, 1, 0)).item()
+        # num_active_Z = jnp.sum(jnp.where(Z_RxCxQ > 0, 1, 0)).item()
+
+        # if num_active_X > 0 or num_active_Z > 0:
+        #     print("--- update weights, input ---")
+        #     print(f"{num_active_X=}")
+        #     print(f"{num_active_Z=}")
+        #     print()
+
         Z_bin_RxCxQ = jnp.where(Z_RxCxQ > 0, 1, 0).astype(jnp.uint8)
 
         X_inv_RxD = (1 - X_RxD)
@@ -203,12 +191,26 @@ class NOCNet:
         delta_capture = r_capture * self.capture
         delta_backoff = r_backoff * -self.backoff
         delta_search = r_search * self.search
+
+        # num_active_delta_capture = jnp.sum(jnp.where(delta_capture > 0, 1, 0)).item()
+        # num_active_delta_backoff = jnp.sum(jnp.where(delta_backoff < 0, 1, 0)).item()
+        # num_active_delta_search = jnp.sum(jnp.where(delta_search > 0, 1, 0)).item()
+
+        # if num_active_delta_capture > 0 or num_active_delta_backoff > 0 or num_active_delta_search > 0:
+        #     print("--- update weights, delta ---")
+        #     print(f"{num_active_delta_capture=}")
+        #     print(f"{num_active_delta_backoff=}")
+        #     print(f"{num_active_delta_search=}")
+        #     print()
+
         weights_updated_RxCxDxQ = self.weights_RxCxDxQ + delta_capture + delta_backoff + delta_search
         weights_clipped_RxCxDxQ = jnp.clip(weights_updated_RxCxDxQ, 0, self.w_max)
         weights_delta_RxCxDxQ = weights_clipped_RxCxDxQ - self.weights_RxCxDxQ
-        self.weights_RxCxDxQ.at[:, :, :, :].set(weights_clipped_RxCxDxQ)
+        self.weights_RxCxDxQ = self.weights_RxCxDxQ.at[:, :, :, :].set(weights_clipped_RxCxDxQ)
         # print(f"{self.weights_RxCxDxQ[0, 0, :, :]=}")
         # print(f"{weights_delta_RxCxDxQ[0, 0, :, :]=}")
+
+        print(f"weights updated, mean absolute magnitude = {jnp.mean(jnp.abs(weights_delta_RxCxDxQ)).item()}")
         return weights_delta_RxCxDxQ
 
 
@@ -237,7 +239,7 @@ def run():
     num_segs_per_dend = 16
     # search << backoff, capture
     capture = 10
-    backoff = 10
+    backoff = 8
     search = 3
     # w_0 doesnt actually show up in the unified dendrite update circuit, so unclear where
     # it comes into play
