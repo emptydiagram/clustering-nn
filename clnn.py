@@ -1,14 +1,12 @@
 from data import get_binarized_mnist
 
 from operator import itemgetter
+import random
 
 import jax
 import jax.numpy as jnp
-from jax import random
 import matplotlib.pyplot as plt
 
-rand_seed = 299792458
-key = random.PRNGKey(rand_seed)
 
 # Neuromorphic Online Clustering network
 
@@ -24,7 +22,7 @@ key = random.PRNGKey(rand_seed)
 # > subset of RFs may be used.
 
 class NOCNet:
-    def __init__(self, params: dict):
+    def __init__(self, params: dict, key):
         print(f"Initializing NOCNet with params: {params}")
         attrs = ['num_classes', 'thresh', 'num_rfs', 'rf_size', 'num_segs_per_dend', 'capture', 'backoff', 'search', 'w_max']
         num_classes, thresh, num_rfs, rf_size, num_segs_per_dend, capture, backoff, search, w_max = itemgetter(*attrs)(params)
@@ -40,7 +38,7 @@ class NOCNet:
         self.search = search
         self.w_max = w_max
 
-        self.weights_RxCxDxQ = random.randint(key, (self.R, self.C, self.D, self.Q), 0, 10, dtype=jnp.uint8)
+        self.weights_RxCxDxQ = jax.random.randint(key, (self.R, self.C, self.D, self.Q), 0, 10, dtype=jnp.uint8)
         print(f"Number of parameters: {self.weights_RxCxDxQ.size}")
 
         # RF
@@ -231,7 +229,15 @@ class NOCNet:
 
 
 
+def set_seed(seed):
+    random.seed(seed)
+
+
 def run():
+    rand_seed = 299792458
+    set_seed(rand_seed)
+    key = jax.random.PRNGKey(rand_seed)
+
     print(f"{jax.devices()=}")
 
     rf_kernel = jnp.array([
@@ -249,12 +255,12 @@ def run():
     labels_01234 = list(range(5))
     labels_all = list(range(10))
 
-    labels = labels_all
+    labels = labels_01
     num_classes = len(labels)
-    train_size = 300 * num_classes
-    test_size = 300 * num_classes
+    train_valid_test_per_class = [500, 100, 100]
 
-    X_train, y_train, X_test, y_test = get_binarized_mnist(restricted_labels=labels, train_size=train_size, test_size=test_size)
+    X_train, y_train, X_valid, y_valid, X_test, y_test = get_binarized_mnist(train_valid_test_per_class, key, restricted_labels=labels)
+
 
     thresh = 5
     num_rfs = 576
@@ -279,7 +285,7 @@ def run():
         # 'w_0': w_0,
         'w_max': w_max
     }
-    nocnet = NOCNet(params)
+    nocnet = NOCNet(params, key)
     results_train = nocnet.supervised_learning(X_train, y_train)
 
     results_test = nocnet.inference(X_test)
