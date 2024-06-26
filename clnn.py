@@ -73,25 +73,23 @@ class NOCNet:
     def supervised_learning(self, X, labels):
         """
         X: NxHxW tensor of bits, collectiion of binarized grayscale images
-        label: Nx1 tensor of ints, the labels range from 0 to 9
+        label: NxC tensor of labels (one-hot)
         """
 
         N = X.shape[0]
         rfs_NxRxD = self.form_receptive_fields(X)
 
-        labels_one_hot_NxC = jnp.eye(self.C)[labels]
-
         # there are R CV groups, each gets a D-bit distal input (RF) and C-bit proximal input (label)
         # this is online learning, no batching of inputs allowed
-        images_correct = []
+        predictions = []
 
         for i in range(N):
-            print(f"\nProcessing image {i}, label = {labels[i]}\n------------------------------")
+            print(f"\nProcessing image {i}, label = {jnp.argmax(labels[i])}\n------------------------------")
 
             # need (C x 1) * (R x D) -> R x C x D
             rf_patterns_RxD = rfs_NxRxD[i, :, :]
 
-            min_results_RxCxD = jnp.einsum('c,rd->rcd', labels_one_hot_NxC[i, :], rf_patterns_RxD)
+            min_results_RxCxD = jnp.einsum('c,rd->rcd', labels[i, :], rf_patterns_RxD)
             pre_thresholds_RxCxQ = jnp.einsum('rcd,rcdq->rcq', min_results_RxCxD, self.weights_RxCxDxQ)
 
             threshold_masks_RxCxQ = pre_thresholds_RxCxQ >= self.thresh
@@ -110,12 +108,7 @@ class NOCNet:
             # winner take all mask
             predicted_digit = jnp.argmax(sums_C)
             predicted_class_C = jnp.array([1 if i == predicted_digit else 0 for i in range(sums_C.shape[0]) ])
-            images_correct.append(int(predicted_digit == labels[i]))
-
-            print(f"{predicted_digit=}")
-            print(f"Cumulative accuracy: {jnp.mean(jnp.array(images_correct)).item():.3f}")
-            if i >= 100:
-                print(f"Last 100 accuracy: {jnp.mean(jnp.array(images_correct[-100:])).item():.3f}")
+            predictions.append(predicted_class_C)
 
             # perform update
             weights_delta_RxCxDxQ = self.update_weights(rf_patterns_RxD, dend_out_RxCxQ)
@@ -145,7 +138,6 @@ class NOCNet:
 
 
                 # display sums_C
-
                 plt.figure(figsize=(6, 6))
                 plt.imshow(sums_C.reshape(1, -1), cmap="binary")
                 plt.title("Summation units")
@@ -170,7 +162,7 @@ class NOCNet:
 
             # plot_stuff()
 
-        return images_correct
+        return predictions
 
     # from NOCAC Fig. 6 caption: "Note that for the update function (Figure 8), the int output A is binarized to bits, i.e., spikes."
     # so the output of dendrite inference function is a Q-bit vector. there are R * C dendrites (1-1 correspondence between CV units and dendrites,
@@ -261,6 +253,11 @@ def run():
 
     X_train, y_train, X_valid, y_valid, X_test, y_test = get_binarized_mnist(train_valid_test_per_class, key, restricted_labels=labels)
 
+    # one-hot encode
+    I_C = jnp.eye(num_classes)
+    y_train_oh = I_C[y_train]
+    y_valid_oh = I_C[y_valid]
+    y_test_oh = I_C[y_test]
 
     thresh = 5
     num_rfs = 576
@@ -286,7 +283,7 @@ def run():
         'w_max': w_max
     }
     nocnet = NOCNet(params, key)
-    results_train = nocnet.supervised_learning(X_train, y_train)
+    results_train = nocnet.supervised_learning(X_train, y_train_oh)
 
     results_test = nocnet.inference(X_test)
 
