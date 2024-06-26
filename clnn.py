@@ -1,6 +1,8 @@
-from data import get_binarized_mnist
+from data import load_data, make_binarized_mnist
 
+from functools import reduce
 from operator import itemgetter
+import pathlib
 import random
 
 import jax
@@ -251,7 +253,31 @@ def run():
     num_classes = len(labels)
     train_valid_test_per_class = [500, 100, 100]
 
-    X_train, y_train, X_valid, y_valid, X_test, y_test = get_binarized_mnist(train_valid_test_per_class, key, restricted_labels=labels)
+    data_file_name = 'bin-mnist-01.npz'
+    data_dir_path = 'data'
+    data_file_path = f'{data_dir_path}/{data_file_name}'
+
+    pathlib.Path(data_dir_path).mkdir(parents=True, exist_ok=True)
+
+    try:
+        X_train, y_train, X_valid, y_valid, X_test, y_test = load_data(data_file_path)
+    except:
+        make_binarized_mnist(train_valid_test_per_class, key, data_file_path, restricted_labels=labels)
+        X_train, y_train, X_valid, y_valid, X_test, y_test = load_data(data_file_path)
+
+    # plot first few images
+    num_plots = (5, 5)
+    plt.figure(figsize=(15, num_plots[0] * 3.4))
+    plt.suptitle(f"First {reduce(lambda x, y: x*y, num_plots)} images")
+    for i in range(num_plots[0]):
+        for j in range(num_plots[1]):
+            idx = i * num_plots[1] + j
+            plt.subplot(num_plots[0], num_plots[1], idx + 1)
+            plt.axis("off")
+            plt.imshow(X_train[idx].reshape(28, 28), cmap="binary")
+            plt.title(f"Label: {y_train[idx]}")
+    plt.show()
+
 
     # one-hot encode
     I_C = jnp.eye(num_classes)

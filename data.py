@@ -1,12 +1,10 @@
-from functools import reduce
-
 from datasets import load_dataset
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
 
-def get_binarized_mnist(train_valid_test_per_class, key, restricted_labels=None):
+def make_binarized_mnist(train_valid_test_per_class, key, save_file_path, restricted_labels=None):
     ds = load_dataset("mnist")
     ds = ds.with_format("jax")
 
@@ -86,17 +84,10 @@ def get_binarized_mnist(train_valid_test_per_class, key, restricted_labels=None)
     print(f"{y_valid.dtype=}, {y_valid.shape=}")
     print(f"{y_test.dtype=}, {y_test.shape=}")
 
-    # plot first few images
-    num_plots = (5, 5)
-    plt.figure(figsize=(15, num_plots[0] * 3.4))
-    plt.suptitle(f"First {reduce(lambda x, y: x*y, num_plots)} images")
-    for i in range(num_plots[0]):
-        for j in range(num_plots[1]):
-            idx = i * num_plots[1] + j
-            plt.subplot(num_plots[0], num_plots[1], idx + 1)
-            plt.axis("off")
-            plt.imshow(X_train[idx].reshape(28, 28), cmap="binary")
-            plt.title(f"Label: {y_train[idx]}")
-    plt.show()
+    jnp.savez(save_file_path, X_train=X_train, X_valid=X_valid, X_test=X_test, y_train=y_train, y_valid=y_valid, y_test=y_test)
+    print(f"Created dataset at {save_file_path}")
 
-    return X_train, y_train, X_valid, y_valid, X_test, y_test
+
+def load_data(file_path):
+    data = jnp.load(file_path, allow_pickle=False)
+    return data['X_train'], data['y_train'], data['X_valid'], data['y_valid'], data['X_test'], data['y_test']
