@@ -88,6 +88,8 @@ class NOCNet:
         # this is online learning, no batching of inputs allowed
         predictions = jnp.empty(labels.shape, dtype=jnp.uint8)
 
+        I_Q = jnp.eye(self.Q)
+
         for i in range(N):
             # need (C x 1) * (R x D) -> R x C x D
             rf_patterns_RxD = rfs_NxRxD[i, :, :]
@@ -99,7 +101,7 @@ class NOCNet:
             thresholded_RxCxQ = pre_thresholds_RxCxQ * threshold_masks_RxCxQ
             thresholded_first_max_idx_RxC = jnp.argmax(thresholded_RxCxQ, axis=2)
 
-            thresholded_first_max_mask_RxCxQ = jnp.eye(self.Q)[thresholded_first_max_idx_RxC]
+            thresholded_first_max_mask_RxCxQ = I_Q[thresholded_first_max_idx_RxC]
             dend_out_RxCxQ = thresholded_RxCxQ * thresholded_first_max_mask_RxCxQ
             dend_max_RxC = jnp.max(dend_out_RxCxQ, axis=2)
 
@@ -254,9 +256,10 @@ def run():
 
     labels = labels_01
     num_classes = len(labels)
-    train_valid_test_per_class = [500, 100, 100]
+    train_valid_test_per_class = [1000, 200, 200]
 
-    data_file_name = 'bin-mnist-01.npz'
+    per_class_str = '{}-{}-{}'.format(*train_valid_test_per_class)
+    data_file_name = f'bin-mnist-01-{per_class_str}.npz'
     data_dir_path = 'data'
     data_file_path = f'{data_dir_path}/{data_file_name}'
 
