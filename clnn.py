@@ -68,26 +68,27 @@ class NOCNet:
         return rfs_NxRxD
 
 
-    def inference(self, X):
-        return self.supervised_learning(X, jnp.ones(X.shape[0], dtype=jnp.uint8))
 
-
-    def supervised_learning(self, X, labels):
+    def inference(self, X, labels=None):
         """
         X: NxHxW tensor of bits, collectiion of binarized grayscale images
         label: NxC tensor of labels (one-hot)
         """
+        do_learning = labels == None
+
+        if do_learning:
+            labels = jnp.ones((X.shape[0], self.C), dtype=jnp.uint8)
+
+        print(f"{X.shape=}, {labels.shape=}")
 
         N = X.shape[0]
         rfs_NxRxD = self.form_receptive_fields(X)
 
         # there are R CV groups, each gets a D-bit distal input (RF) and C-bit proximal input (label)
         # this is online learning, no batching of inputs allowed
-        predictions = []
+        predictions = jnp.empty(labels.shape, dtype=jnp.uint8)
 
         for i in range(N):
-            print(f"\nProcessing image {i}, label = {jnp.argmax(labels[i])}\n------------------------------")
-
             # need (C x 1) * (R x D) -> R x C x D
             rf_patterns_RxD = rfs_NxRxD[i, :, :]
 
@@ -109,60 +110,62 @@ class NOCNet:
 
             # winner take all mask
             predicted_digit = jnp.argmax(sums_C)
-            predicted_class_C = jnp.array([1 if i == predicted_digit else 0 for i in range(sums_C.shape[0]) ])
-            predictions.append(predicted_class_C)
+            predicted_class_C = jnp.array([1 if i == predicted_digit else 0 for i in range(sums_C.shape[0])], dtype=jnp.uint8)
+            # predictions.append(predicted_class_C)
+            predictions = predictions.at[i, :].set(predicted_class_C)
 
-            # perform update
-            weights_delta_RxCxDxQ = self.update_weights(rf_patterns_RxD, dend_out_RxCxQ)
+            if do_learning:
+                # perform update
+                weights_delta_RxCxDxQ = self.update_weights(rf_patterns_RxD, dend_out_RxCxQ)
 
-            def plot_stuff():
-                # print(f"average weight delta = {weights_delta_RxCxDxQ.mean().item()}")
-                weights_abs_diff_RxC = jnp.sum(jnp.abs(weights_delta_RxCxDxQ), axis=(2, 3))
-                weights_net_delta_RxC = jnp.sum(weights_delta_RxCxDxQ, axis=(2,3))
+                def plot_stuff():
+                    # print(f"average weight delta = {weights_delta_RxCxDxQ.mean().item()}")
+                    weights_abs_diff_RxC = jnp.sum(jnp.abs(weights_delta_RxCxDxQ), axis=(2, 3))
+                    weights_net_delta_RxC = jnp.sum(weights_delta_RxCxDxQ, axis=(2,3))
 
-                O = int(jnp.sqrt(self.R))
-                halfC = int(self.C / 2)
+                    O = int(jnp.sqrt(self.R))
+                    halfC = int(self.C / 2)
 
-                # display cvu_out
-                cvu_out_OxOxC = cvu_out_RxC.reshape(O, O, self.C)
+                    # display cvu_out
+                    cvu_out_OxOxC = cvu_out_RxC.reshape(O, O, self.C)
 
-                plt.figure(figsize=(halfC * 3 + 2, 6))
-                for i in range(self.C):
-                    for j in range(halfC):
-                        idx = i * halfC + j
-                        plt.subplot(2, halfC, idx + 1)
-                        plt.imshow(cvu_out_OxOxC[:, :, idx], cmap="binary")
-                        plt.title(f"CVU out, Class = {idx}")
+                    plt.figure(figsize=(halfC * 3 + 2, 6))
+                    for i in range(self.C):
+                        for j in range(halfC):
+                            idx = i * halfC + j
+                            plt.subplot(2, halfC, idx + 1)
+                            plt.imshow(cvu_out_OxOxC[:, :, idx], cmap="binary")
+                            plt.title(f"CVU out, Class = {idx}")
 
-                plt.suptitle(f"CVU output, for all {self.C} classes")
-                # plt.show()
-                plt.close()
-
-
-                # display sums_C
-                plt.figure(figsize=(6, 6))
-                plt.imshow(sums_C.reshape(1, -1), cmap="binary")
-                plt.title("Summation units")
-                # plt.show()
-                plt.close()
+                    plt.suptitle(f"CVU output, for all {self.C} classes")
+                    # plt.show()
+                    plt.close()
 
 
-                # display weights_abs_diff
-                weights_abs_diff_OxOxC = weights_abs_diff_RxC.reshape(O, O, self.C)
-                # print("sum of absolute differences: ", jnp.sum(weights_abs_diff_OxOxC))
-                plt.figure(figsize=(halfC * 3 + 2, 6))
-                for i in range(2):
-                    for j in range(halfC):
-                        idx = i * halfC + j
-                        plt.subplot(2, halfC, idx + 1)
-                        plt.imshow(weights_abs_diff_OxOxC[:, :, idx], cmap="binary")
-                        plt.title(f"Σ|Δ|, Class = {idx}")
+                    # display sums_C
+                    plt.figure(figsize=(6, 6))
+                    plt.imshow(sums_C.reshape(1, -1), cmap="binary")
+                    plt.title("Summation units")
+                    # plt.show()
+                    plt.close()
 
-                plt.suptitle(f"Weight update sum of absolute deviances, for all {self.C} classes")
-                # plt.show()
-                plt.close()
 
-            # plot_stuff()
+                    # display weights_abs_diff
+                    weights_abs_diff_OxOxC = weights_abs_diff_RxC.reshape(O, O, self.C)
+                    # print("sum of absolute differences: ", jnp.sum(weights_abs_diff_OxOxC))
+                    plt.figure(figsize=(halfC * 3 + 2, 6))
+                    for i in range(2):
+                        for j in range(halfC):
+                            idx = i * halfC + j
+                            plt.subplot(2, halfC, idx + 1)
+                            plt.imshow(weights_abs_diff_OxOxC[:, :, idx], cmap="binary")
+                            plt.title(f"Σ|Δ|, Class = {idx}")
+
+                    plt.suptitle(f"Weight update sum of absolute deviances, for all {self.C} classes")
+                    # plt.show()
+                    plt.close()
+
+                # plot_stuff()
 
         return predictions
 
@@ -309,8 +312,7 @@ def run():
         'w_max': w_max
     }
     nocnet = NOCNet(params, key)
-    results_train = nocnet.supervised_learning(X_train, y_train_oh)
-
+    nocnet.inference(X_train, y_train_oh)
     results_test = nocnet.inference(X_test)
 
 
