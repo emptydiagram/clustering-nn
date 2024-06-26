@@ -105,14 +105,14 @@ class NOCNet:
             dend_out_RxCxQ = thresholded_RxCxQ * thresholded_first_max_mask_RxCxQ
             dend_max_RxC = jnp.max(dend_out_RxCxQ, axis=2)
 
-            cvu_out_RxC = jnp.array([[1 if i > 0 else 0 for i in dend_max_RxC[r, :]] for r in range(self.R)])
+            cvu_out_RxC = (dend_max_RxC > 0).astype(jnp.uint8)
 
             # create C summation units, each taking R inputs
             sums_C = jnp.sum(cvu_out_RxC, axis=0)
 
             # winner take all mask
             predicted_digit = jnp.argmax(sums_C)
-            predicted_class_C = jnp.array([1 if i == predicted_digit else 0 for i in range(sums_C.shape[0])], dtype=jnp.uint8)
+            predicted_class_C = (jnp.arange(self.C) == predicted_digit).astype(jnp.uint8)
             # predictions.append(predicted_class_C)
             predictions = predictions.at[i, :].set(predicted_class_C)
 
