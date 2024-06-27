@@ -24,10 +24,10 @@ import matplotlib.pyplot as plt
 # > subset of RFs may be used.
 
 class NOCNet:
-    def __init__(self, params: dict, key):
+    def __init__(self, params: dict):
         print(f"Initializing NOCNet with params: {params}")
-        attrs = ['num_classes', 'thresh', 'num_rfs', 'rf_size', 'num_segs_per_dend', 'capture', 'backoff', 'search', 'w_max']
-        num_classes, thresh, num_rfs, rf_size, num_segs_per_dend, capture, backoff, search, w_max = itemgetter(*attrs)(params)
+        attrs = ['num_classes', 'thresh', 'num_rfs', 'rf_size', 'num_segs_per_dend', 'capture', 'backoff', 'search', 'w_init', 'w_max']
+        num_classes, thresh, num_rfs, rf_size, num_segs_per_dend, capture, backoff, search, w_init, w_max = itemgetter(*attrs)(params)
 
 
         self.thresh = thresh
@@ -38,9 +38,10 @@ class NOCNet:
         self.capture = capture
         self.backoff = backoff
         self.search = search
+        self.w_init = w_init
         self.w_max = w_max
 
-        self.weights_RxCxDxQ = jax.random.randint(key, (self.R, self.C, self.D, self.Q), 0, 10, dtype=jnp.uint8)
+        self.weights_RxCxDxQ = jnp.ones((self.R, self.C, self.D, self.Q), dtype=jnp.uint8) * self.w_init
         print(f"Number of parameters: {self.weights_RxCxDxQ.size}")
 
         # RF
@@ -259,7 +260,8 @@ def run():
     train_valid_test_per_class = [1000, 200, 200]
 
     per_class_str = '{}-{}-{}'.format(*train_valid_test_per_class)
-    data_file_name = f'bin-mnist-01-{per_class_str}.npz'
+    classes_str = ''.join([str(lbl) for lbl in labels])
+    data_file_name = f'bin-mnist-{classes_str}-{per_class_str}.npz'
     data_dir_path = 'data'
     data_file_path = f'{data_dir_path}/{data_file_name}'
 
@@ -298,9 +300,10 @@ def run():
     capture = 10
     backoff = 8
     search = 3
-    # w_0 doesnt actually show up in the unified dendrite update circuit, so unclear where
-    # it comes into play
-    # w_0 = 5
+    # in the macrocolumn paper, this is called w_b. the NOC paper is a bit unclear on this, but
+    # it looks like w_0 may be, in addition to the UB on the result of a search update, the
+    # initial weight value for all weights. here I call it w_init instead to make that clear
+    w_init = 5
     w_max = 8
     params = {
         'num_classes': num_classes,
@@ -311,10 +314,10 @@ def run():
         'capture': capture,
         'backoff': backoff,
         'search': search,
-        # 'w_0': w_0,
+        'w_init': w_init,
         'w_max': w_max
     }
-    nocnet = NOCNet(params, key)
+    nocnet = NOCNet(params)
     nocnet.inference(X_train, y_train_oh)
     results_test = nocnet.inference(X_test)
 
