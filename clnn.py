@@ -227,6 +227,61 @@ class NOCNet:
         return weights_delta_RxCxDxQ
 
 
+def tune_nocnet(X_train, y_train, X_valid, y_valid, num_classes, rf_size, num_batches):
+    num_rfs = 576
+    num_segs_per_dend = 16
+
+    thresh = 8
+    capture = 1
+    backoff = 4
+    search = 0
+    w_init = 5
+    w_max = 8
+
+    params = {
+        'num_classes': num_classes,
+        'thresh': thresh,
+        'num_rfs': num_rfs,
+        'rf_size': rf_size,
+        'num_segs_per_dend': num_segs_per_dend,
+        'capture': capture,
+        'backoff': backoff,
+        'search': search,
+        'w_init' : w_init,
+        'w_max': w_max
+    }
+    nocnet = NOCNet(params)
+
+    X_train_batches = jnp.array_split(X_train, num_batches)
+    y_train_batches = jnp.array_split(y_train, num_batches)
+    X_valid_batches = jnp.array_split(X_valid, num_batches)
+    y_valid_batches = jnp.array_split(y_valid, num_batches)
+
+    print(f"{X_train.shape=}, {X_train_batches[0].shape=}, {y_train.shape=}, {y_train_batches[0].shape=}")
+    print(f"{X_valid.shape=}, {X_valid_batches[0].shape=}")
+
+    for subseq_idx, batch_idx in enumerate(range(num_batches)):
+        X_train_batch = X_train_batches[batch_idx]
+        X_valid_batch = X_valid_batches[batch_idx]
+        y_train_batch = y_train_batches[batch_idx]
+        y_valid_batch = y_valid_batches[batch_idx]
+        batch_size_train = X_train_batch.shape[0]
+        batch_size_valid = X_valid_batch.shape[0]
+
+        nocnet.inference(X_train_batch, y_train_batch)
+
+        train_preds = nocnet.inference(X_train_batch)
+        train_num_correct = jnp.sum(y_train_batch * train_preds).item()
+
+        valid_preds = nocnet.inference(X_valid_batch)
+        valid_num_correct = jnp.sum(y_valid_batch * valid_preds).item()
+
+        print(f"[{subseq_idx}] {train_num_correct=}, {batch_size_train=}, {valid_num_correct=}, {batch_size_valid=}")
+
+    raise NotImplementedError
+    # (and compare it to the history prior (or representations of the history prior))
+    # algorithm should make early stopping decisions to avoid running for too long on
+    # bad hyperparam combinations
 
 
 def set_seed(seed):
@@ -292,6 +347,10 @@ def run():
     y_train_oh = I_C[y_train]
     y_valid_oh = I_C[y_valid]
     y_test_oh = I_C[y_test]
+
+    num_batches_tune = 10
+
+    tune_nocnet(X_train, y_train_oh, X_valid, y_valid_oh, num_classes, rf_size, num_batches_tune)
 
     thresh = 5
     num_rfs = 576
